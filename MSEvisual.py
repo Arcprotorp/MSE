@@ -19,6 +19,15 @@ def NBtorus(X, r = 1):
 
     return N
 
+def random_rotate_windows(a,H,W):
+    m,n,r = a.shape
+    a5D = a.reshape(m//H,H,n//W,W,-1)
+    cw0 = a5D[:,::-1,:,:,:].transpose(0,2,3,1,4)
+    ccw0 = a5D[:,:,:,::-1,:].transpose(0,2,3,1,4)
+    mask = np.random.choice([False,True],size=(m//H,n//W))
+    out = np.where(mask[:,:,None,None,None],cw0,ccw0)
+    return out.swapaxes(1,2).reshape(a.shape)
+
 def performance(X,Y,R,M):
     #IF NBarray focuses only on metabolic enzymes
     #N Original array of cells
@@ -126,9 +135,20 @@ def division(X,T):
 
     
     knights = remains * dividers[...,None] #knights acquire their heritage
+
+    print(np.array_equal(remains,knights))
     
-    knight_lands = np.roll(knights,shift=np.random.choice([1,-1], p=[0.5, 0.5]),axis=np.random.randint(0,2))
+    #knight_lands = np.roll(knights,shift=np.random.choice([1,-1], p=[0.5, 0.5]),axis=np.random.randint(0,2))
     #^3D: This is just a deterministic shift in one direction! All knights will move together in one step
+
+    m,n,r = knights.shape
+    a5D = knights.reshape(m//2,2,n//2,2,-1)
+    cw0 = a5D[:,::-1,:,:,:].transpose(0,2,3,1,4)
+    ccw0 = a5D[:,:,:,::-1,:].transpose(0,2,3,1,4)
+    mask = np.random.choice([False,True],size=(m//2,n//2))
+    knight_lands = np.where(mask[:,:,None,None,None],cw0,ccw0).swapaxes(1,2).reshape(knights.shape)
+    #^probabilistic rotation of 2*2 tiles
+    
     
     knight_grid = (np.sum(knight_lands, axis=2)>0)#2D array where the knights wandered
 
@@ -139,14 +159,49 @@ def division(X,T):
     
     return Y
 
+def division_OH(X,T,agro=0.01): #OVERAULED AND INTENDED DIVISION METHOD!
+    #Work in progress
+    dividers = (np.sum(X, axis=2)>T) #cells ower a threshold are primed for division
+    #dormants = (dividers==False) #dormant areas
+    alive = (np.sum(X, axis=2)>0) #alive areas
+
+    cells_to_divide=(X * dividers[...,None]).astype(int) #cells which are dividing
+
+    #print(np.sum(np.sum(np.sum(array_to_divide))))
+
+    heirs = np.random.binomial(n=cells_to_divide,p=0.5) #3D after division, these cells will inherit the position
+    knights = cells_to_divide - heirs #3D array of the remaining heritage, it is for the wandering knights
+    #knights = remains * dividers[...,None] #knights acquire their heritage
+
+    rand_shift = np.random.randint(-1,2)
+    rand_axis = np.random.randint(0,2)
+    knight_arrives = np.roll(random_rotate_windows(np.roll(knights,shift=rand_shift,axis=rand_axis),2,2),shift=-1*rand_shift,axis=rand_axis)
+    #^3D: A very puritan way for Brownian motion - every 2*2 sub-array has a chance to turn by 90 degrees
+    #the 2*2 grid is fixed, therefore in every round we roll the array,to mix up things
+
+    knight_grid = (np.sum(knight_arrives, axis=2)>0) #2D grid where the knight arrives
+    conflict_grid = alive * knight_grid #this are territories where the knights find inhabitated place, hence the conflict
+    peace_grid = (conflict_grid==False) #places where no conflict happends
+
+    knight_wins = conflict_grid * (np.random.random(size=dividers.shape)<agro) #2D array with values 1 where the knight wins
+
+    usurpers = knight_arrives * knight_wins[...,None]
+    usurped = X * knight_wins[...,None]
+    peaceful_knights = knight_arrives * peace_grid[...,None]
+
+    X = X - cells_to_divide + heirs - usurped + usurpers + peaceful_knights
+
+    return X
+
 
 #M.S.E. - Metabolically connected Stochastic corrector Environment
-gridsize=300
-T=50 #treshold for division
+gridsize=100
+T=100 #treshold for division
 R=2 #replication enzyme set size
-M=3 #metabolic enzyem set size
-mu=0.0001 #mutation probability
-rad_M=5 #metabolic neighbourhood
+M=5 #metabolic enzyme set size
+mu=0.001 #mutation probability
+rad_M=8 #metabolic neighbourhood
+agression=0.1 #chance that the occupied area will be usurped by a wandering knight
 STEPNUM=1000
 
 #supercell=np.array([(T/(R+M))/T for i in range(0,R+M)])
@@ -170,8 +225,12 @@ fig.patch.set_facecolor('black')
 N = NBtorus(MSE, r = rad_M)
 x = performance(MSE, N, R, M)
 
-with writer.saving(fig, FILE+".mp4", 50):
+with writer.saving(fig, FILE+".mp4", 100):
+    plt.subplot(121)
     plt.spy(x)
+    plt.axis('off')
+    plt.subplot(122)
+    plt.imshow(np.sum(MSE, axis=2)/T)
     plt.axis('off')
     writer.grab_frame()
     plt.clf()    
@@ -184,12 +243,16 @@ with writer.saving(fig, FILE+".mp4", 50):
         MSEminus = decay(MSEplus,Wrel,sqrsize = gridsize, bins=R+M+1)
         #rep = replication(Wrel, sqrsize = gridsize, enz_num = R+M+1)
         #dec = decay(Wrel, sqrsize = gridsize, enz_num = R+M+1)
-        MSE = division(MSEminus,T=T)
+        MSE = division_OH(MSEminus, T=T, agro=agression)
         #Visualizer submodule
         x = performance(MSE, N, R, M)
+        plt.subplot(121)
+        plt.text(1,1,"step="+str(step), fontsize=20)
         plt.spy(x)
         plt.axis('off')
-        plt.text(1,1,"step="+str(step), fontsize=20)
+        plt.subplot(122)
+        plt.imshow(np.sum(MSE, axis=2)/T)
+        plt.axis('off')
         writer.grab_frame()
         plt.clf()
 
